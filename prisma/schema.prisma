@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────
+
+enum OrderType {
+  Buy
+  Sell
+}
+
+enum PriceType {
+  Fixed
+  Market
+}
+
+enum OrderStatus {
+  Queued
+  Processing
+  InProgress
+  Finished
+  Canceled
+}
+
+enum WalletLogAction {
+  Deposit
+  Withdraw
+  OrderFreeze
+  OrderUnfreeze
+  OrderDeduct
+  OrderCredit
+}
+
+// ─── Models ──────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  wallet Wallet?
+  orders Order[]
+}
+
+model Wallet {
+  id            String  @id @default(cuid())
+  balance       Decimal @default(0) @db.Decimal(20, 8)
+  frozenBalance Decimal @default(0) @db.Decimal(20, 8)
+  userId        String  @unique
+
+  user User       @relation(fields: [userId], references: [id])
+  logs WalletLog[]
+}
+
+model WalletLog {
+  id            String          @id @default(cuid())
+  walletId      String
+  amount        Decimal         @db.Decimal(20, 8)
+  action        WalletLogAction
+  balanceBefore Decimal         @db.Decimal(20, 8)
+  balanceAfter  Decimal         @db.Decimal(20, 8)
+  createdAt     DateTime        @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+}
+
+model Order {
+  id                  String      @id @default(cuid())
+  userId              String
+  type                OrderType
+  priceType           PriceType
+  status              OrderStatus
+  price               Decimal?    @db.Decimal(20, 8)
+  amount              Decimal     @db.Decimal(20, 8)
+  remainingAmount     Decimal     @db.Decimal(20, 8)
+  totalPrice          Decimal     @db.Decimal(20, 8)
+  remainingTotalPrice Decimal     @db.Decimal(20, 8)
+  wage                Decimal     @db.Decimal(20, 8)
+  remainingWage       Decimal     @db.Decimal(20, 8)
+  avgPrice            Decimal?    @db.Decimal(20, 8)
+  createdAt           DateTime    @default(now())
+
+  user             User               @relation(fields: [userId], references: [id])
+  buyTransactions  OrderTransaction[] @relation("BuyTransactions")
+  sellTransactions OrderTransaction[] @relation("SellTransactions")
+}
+
+model OrderTransaction {
+  id          String   @id @default(cuid())
+  buyOrderId  String
+  sellOrderId String
+  amount      Decimal  @db.Decimal(20, 8)
+  price       Decimal  @db.Decimal(20, 8)
+  totalPrice  Decimal  @db.Decimal(20, 8)
+  buyerFee    Decimal  @db.Decimal(20, 8)
+  sellerFee   Decimal  @db.Decimal(20, 8)
+  createdAt   DateTime @default(now())
+
+  buyOrder  Order @relation("BuyTransactions", fields: [buyOrderId], references: [id])
+  sellOrder Order @relation("SellTransactions", fields: [sellOrderId], references: [id])
+}
