@@ -11,8 +11,8 @@ import { UserService } from 'src/user/user.service';
 import { RegisterDto } from './dto/register.dto';
 import { ConflictException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import { error } from 'console';
 import { LoginDto } from './dto/login.dto';
+import { WalletService } from 'src/wallet/wallet.service';
 
 @Injectable()
 export class AuthService {
@@ -21,6 +21,7 @@ export class AuthService {
     private jwtService: JwtService,
     private redisService: RedisService,
     private configService: ConfigService,
+    private walletService: WalletService,
   ) {}
 
   private async generateTokens(userId: string) {
@@ -64,6 +65,8 @@ export class AuthService {
       firstName: data.firstName,
       lastName: data.lastName,
     });
+
+    await this.walletService.createWalletForUser(user.id);
 
     return this.generateTokens(user.id);
   }

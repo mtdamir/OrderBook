@@ -1,10 +1,11 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from 'src/database/prisma.service';
-import { PrismaClient } from '@prisma/client';
+import { PrismaTransaction } from 'src/database/prisma.types';
+
 
 @Injectable()
-export class WalletRepo {
-  protected readonly logger = new Logger(WalletRepo.name);
+export class WalletRepository {
+  protected readonly logger = new Logger(WalletRepository.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -16,16 +17,16 @@ export class WalletRepo {
     });
   }
 
-  async create(userId: string) {
-    return this.prisma.wallet.create({
+  async create(userId: string, tx?: PrismaTransaction) {
+    const client = tx ?? this.prisma;
+    return client.wallet.create({
       data: { userId },
     });
   }
 
-  async increaseBalance(walleId: string, amount: number, tx?: PrismaClient) {
-    const client = tx ?? this.prisma;
-    return client.wallet.update({
-      where: { id: walleId },
+  async increaseBalance(walletId: string, amount: number, tx: PrismaTransaction) {
+    return tx.wallet.update({
+      where: { id: walletId },
       data: {
         balance: {
           increment: amount,
@@ -34,10 +35,9 @@ export class WalletRepo {
     });
   }
 
-  async decreaseBalance(walletId: string, amount: number, tx?: PrismaClient) {
-    const client = tx ?? this.prisma;
+  async decreaseBalance(walletId: string, amount: number, tx: PrismaTransaction) {
 
-    const wallet = await client.wallet.findFirst({
+    const wallet = await tx.wallet.findFirst({
       where: { id: walletId },
     });
 
@@ -45,7 +45,7 @@ export class WalletRepo {
       throw new BadRequestException('Insufficient balance');
     }
 
-    return client.wallet.update({
+    return tx.wallet.update({
       where: { id: walletId },
       data: {
         balance: {
@@ -55,10 +55,9 @@ export class WalletRepo {
     });
   }
 
-  async freeze(walletId: string, amount: number, tx?: PrismaClient) {
-    const client = tx ?? this.prisma;
+  async freeze(walletId: string, amount: number, tx: PrismaTransaction) {
 
-    const wallet = await client.wallet.findFirst({
+    const wallet = await tx.wallet.findFirst({
       where: { id: walletId },
     });
 
@@ -66,7 +65,7 @@ export class WalletRepo {
       throw new BadRequestException('Insufficient balance');
     }
 
-    return client.wallet.update({
+    return tx.wallet.update({
       where: { id: walletId },
       data: {
         balance: { decrement: amount },
@@ -75,10 +74,9 @@ export class WalletRepo {
     });
   }
 
-  async unfreeze(walletId: string, amount: number, tx?: PrismaClient) {
-    const client = tx ?? this.prisma;
+  async unfreeze(walletId: string, amount: number, tx: PrismaTransaction) {
 
-    const wallet = await client.wallet.findFirst({
+    const wallet = await tx.wallet.findFirst({
       where: { id: walletId },
     });
 
@@ -86,7 +84,7 @@ export class WalletRepo {
       throw new BadRequestException('Insufficient frozen balance');
     }
 
-    return client.wallet.update({
+    return tx.wallet.update({
       where: { id: walletId },
       data: {
         frozenBalance: { decrement: amount },
@@ -95,10 +93,9 @@ export class WalletRepo {
     });
   }
 
-  async deductFrozen(walletId: string, amount: number, tx?: PrismaClient) {
-    const client = tx ?? this.prisma;
+  async deductFrozen(walletId: string, amount: number, tx: PrismaTransaction) {
 
-    const wallet = await client.wallet.findFirst({
+    const wallet = await tx.wallet.findFirst({
         where: { id: walletId }
     });
 
@@ -106,7 +103,7 @@ export class WalletRepo {
         throw new BadRequestException('Insufficient frozen balance');
     }
 
-    return client.wallet.update({
+    return tx.wallet.update({
         where: { id: walletId },
         data: {
             frozenBalance: { decrement: amount }
