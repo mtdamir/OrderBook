@@ -18,7 +18,7 @@ export class WalletService {
 
   async getWallet(userId: string) {
     const wallet = await this.walletRepo.findByUserId(userId);
-    if (!wallet) {throw new NotFoundException(`Wallet not found for user with ID: ${userId}`,);
+    if (!wallet) {throw new NotFoundException(`Wallet not found`);
     }
     return wallet;
   }
@@ -26,9 +26,7 @@ export class WalletService {
   async deposit(userId: string, dto: DepositDto) {
     const wallet = await this.walletRepo.findByUserId(userId);
     if (!wallet) {
-      throw new NotFoundException(
-        `Wallet not found for user with ID: ${userId}`,
-      );
+      throw new NotFoundException(`Wallet not found`);
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -56,9 +54,7 @@ export class WalletService {
   async withdraw(userId: string, dto: WithdrawDto) {
     const wallet = await this.walletRepo.findByUserId(userId);
     if (!wallet) {
-      throw new NotFoundException(
-        `Wallet not found for user with ID: ${userId}`,
-      );
+      throw new NotFoundException(`Wallet not found`);
     }
 
     await this.prisma.$transaction(async (tx) => {
