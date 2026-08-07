@@ -43,7 +43,7 @@ export class AuthService {
     ]);
 
     await this.redisService.set(
-      `refresh_token: ${userId}`,
+      `refresh_token:${userId}`,
       refresh_token,
       7 * 24 * 60 * 60,
     );
@@ -68,7 +68,7 @@ export class AuthService {
 
     await this.walletService.createWalletForUser(user.id);
 
-    return this.generateTokens(user.id);
+    return await this.generateTokens(user.id);
   }
 
   async login(data: LoginDto) {
@@ -86,7 +86,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    return this.generateTokens(finduser.id);
+    return await this.generateTokens(finduser.id);
   }
 
 
