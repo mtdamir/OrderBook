@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'src/database/prisma.service';
 import { PrismaTransaction } from 'src/database/prisma.types';
+import { GetMyOrdersDto } from '../dto/get-orders.dto';
 
 @Injectable()
 export class OrderRepository {
@@ -49,13 +50,20 @@ export class OrderRepository {
     });
   }
 
-  async findByUserId(userId: string, filters?: { status?: OrderStatus }) {
+  async findByUserId(userId: string, filters?: GetMyOrdersDto) {
+    const page = filters?.page ?? 1;
+    const limit = filters?.limit ?? 10;
+
     return this.prisma.order.findMany({
       where: {
         userId,
         ...(filters?.status && { status: filters.status }),
+        ...(filters?.type && { type: filters.type }),
+        ...(filters?.priceType && { priceType: filters.priceType }),
       },
       orderBy: { createdAt: 'desc' },
+      skip: (page - 1) * limit,
+      take: limit,
     });
   }
 

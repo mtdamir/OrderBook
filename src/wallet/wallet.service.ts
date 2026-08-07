@@ -7,7 +7,6 @@ import { PrismaService } from 'src/database/prisma.service';
 import { WalletLogAction } from '@prisma/client';
 import { PrismaTransaction } from 'src/database/prisma.types';
 
-
 @Injectable()
 export class WalletService {
   constructor(
@@ -18,7 +17,8 @@ export class WalletService {
 
   async getWallet(userId: string) {
     const wallet = await this.walletRepo.findByUserId(userId);
-    if (!wallet) {throw new NotFoundException(`Wallet not found`);
+    if (!wallet) {
+      throw new NotFoundException(`Wallet not found`);
     }
     return wallet;
   }
@@ -79,8 +79,49 @@ export class WalletService {
     });
   }
 
+  async creditBalance(userId: string, amount: number, tx: PrismaTransaction) {
+    const wallet = await this.getWallet(userId);
 
-  async createWalletForUser(userId:string, tx?:PrismaTransaction){
+      if (!wallet) {
+      throw new NotFoundException('Wallet not found');
+    }
+
+    return this.walletRepo.increaseBalance(wallet.id, amount, tx);
+  }
+
+  async freeze(userId: string, amount: number, tx: PrismaTransaction) {
+    const wallet = await this.walletRepo.findByUserId(userId);
+
+    if (!wallet) {
+      throw new NotFoundException('Wallet not found');
+    }
+
+    return this.walletRepo.freeze(wallet.id, amount, tx);
+  }
+
+  async unfreeze(userId: string, amount: number, tx: PrismaTransaction) {
+    const wallet = await this.walletRepo.findByUserId(userId);
+
+    if (!wallet) {
+      throw new NotFoundException('Wallet not found');
+    }
+
+    return this.walletRepo.unfreeze(wallet.id, amount, tx);
+  }
+
+  async deductFrozen(userId: string, amount: number, tx: PrismaTransaction) {
+    const wallet = await this.walletRepo.findByUserId(userId);
+
+    if (!wallet) {
+      throw new NotFoundException('Wallet not found');
+    }
+
+    return this.walletRepo.deductFrozen(wallet.id, amount, tx);
+  }
+
+  a
+
+  async createWalletForUser(userId: string, tx?: PrismaTransaction) {
     return this.walletRepo.create(userId, tx);
   }
 }
