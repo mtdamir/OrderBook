@@ -1,25 +1,28 @@
-import { IsEnum, IsNumber, IsOptional, Min } from 'class-validator';
+import { IsEnum, IsNumber, IsOptional } from 'class-validator';
 import { OrderType, PriceType } from '@prisma/client';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateOrderDto {
+  @ApiProperty({ enum: OrderType, example: OrderType.Buy, description: 'Order side' })
   @IsEnum(OrderType)
   type: OrderType;
 
+  @ApiProperty({ enum: PriceType, example: PriceType.Fixed, description: 'Price calculation mode' })
   @IsEnum(PriceType)
   priceType: PriceType;
 
+  @ApiPropertyOptional({ example: 5000, description: 'Limit price for fixed-price orders' })
   @IsOptional()
   @IsNumber()
-  @Min(0)
   price?: number;
 
+  @ApiPropertyOptional({ example: 10, description: 'Order amount' })
   @IsOptional()
   @IsNumber()
-  @Min(0)
   amount?: number;
 
+  @ApiPropertyOptional({ example: 50000, description: 'Total value of the order' })
   @IsOptional()
   @IsNumber()
-  @Min(0)
   total?: number;
 }
