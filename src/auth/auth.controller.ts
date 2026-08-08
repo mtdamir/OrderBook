@@ -28,7 +28,6 @@ export class AuthController {
   
 
   @Post('login')
-  @ApiBearerAuth('refresh-token')
   @ApiOperation({ summary: 'Login user' })
   @ApiResponse({ status: 200, description: 'User logged in successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
