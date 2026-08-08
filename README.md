@@ -285,8 +285,3 @@ redis-cli LLEN orders:queue
 
 **5. Idempotency via Redis** — clients send a unique `Idempotency-Key` header. The server caches responses in Redis for 24 hours, so duplicate requests return the same result without re-processing.
 
----
-
-## 📝 License
-
-MIT
