@@ -13,7 +13,7 @@ import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 
 @ApiTags('Wallet')
-@ApiBearerAuth('access-token')
+@ApiBearerAuth('refresh-token')
 @Controller('wallet')
 @UseGuards(JwtAuthGuard)
 export class WalletController {

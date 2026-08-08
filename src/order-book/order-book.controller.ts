@@ -6,6 +6,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -21,9 +22,10 @@ import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { OrderBookService } from './order-book.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { GetMyOrdersDto } from './dto/get-orders.dto';
-
+import { IdempotencyGuard } from 'src/common/guards/idempotency.guard';
+import { IdempotencyInterceptor } from 'src/common/interceptors/idempotency.interceptor';
 @ApiTags('OrderBook')
-@ApiBearerAuth('access-token')
+@ApiBearerAuth('refresh-token')
 @Controller('order-book')
 @UseGuards(JwtAuthGuard)
 export class OrderBookController {
@@ -35,6 +37,8 @@ export class OrderBookController {
   @ApiResponse({ status: 201, description: 'Order created successfully' })
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @UseGuards(IdempotencyGuard)
+  @UseInterceptors(IdempotencyInterceptor)
   createOrder(@CurrentUser() user: any, @Body() dto: CreateOrderDto) {
     return this.orderBookService.createOrder(user.id, dto);
   }

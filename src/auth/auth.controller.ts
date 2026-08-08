@@ -26,7 +26,7 @@ export class AuthController {
   
 
   @Post('login')
-  @ApiBearerAuth('access-token')
+  @ApiBearerAuth('refresh-token')
   @ApiOperation({ summary: 'Login user' })
   @ApiResponse({ status: 200, description: 'User logged in successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
@@ -36,7 +36,7 @@ export class AuthController {
 
   @Post('logout')
   @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('access-token')
+  @ApiBearerAuth('refresh-token')
   @ApiOperation({ summary: 'Logout authenticated user' })
   @ApiResponse({ status: 200, description: 'User logged out successfully' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })

@@ -6,6 +6,7 @@ import { UserModule } from './user/user.module';
 import { AuthModule } from './auth/auth.module';
 import { WalletModule } from './wallet/wallet.module';
 import { OrderBookModule } from './order-book/order-book.module';
+import { IdempotencyModule } from './common/idempotency/idempotency.module';
 
 
 @Module({
@@ -15,6 +16,7 @@ import { OrderBookModule } from './order-book/order-book.module';
     RedisModule,
     UserModule,
     AuthModule,
+    IdempotencyModule,
     WalletModule,
     OrderBookModule,
   ],

@@ -25,7 +25,7 @@ async function bootstrap() {
         bearerFormat: 'JWT',
         in: 'header',
       },
-      'access-token',
+      'refresh-token',
     )
     .build();
 
