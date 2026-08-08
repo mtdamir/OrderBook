@@ -1,6 +1,6 @@
 ﻿# 📈 P2P OrderBook
 
-A production-ready **Peer-to-Peer OrderBook system** built with NestJS, PostgreSQL, and Redis. Supports fixed-price and market orders with a Redis-backed matching engine.
+A  **Peer-to-Peer OrderBook system** built with NestJS, PostgreSQL, and Redis. Supports fixed-price and market orders with a Redis-backed matching engine.
 
 ---
 
