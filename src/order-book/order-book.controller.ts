@@ -24,6 +24,9 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { GetMyOrdersDto } from './dto/get-orders.dto';
 import { IdempotencyGuard } from 'src/common/guards/idempotency.guard';
 import { IdempotencyInterceptor } from 'src/common/interceptors/idempotency.interceptor';
+import { Throttle, SkipThrottle } from '@nestjs/throttler';
+
+
 @ApiTags('OrderBook')
 @ApiBearerAuth('refresh-token')
 @Controller('order-book')
@@ -37,6 +40,7 @@ export class OrderBookController {
   @ApiResponse({ status: 201, description: 'Order created successfully' })
   @ApiResponse({ status: 400, description: 'Bad request' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @Throttle({ short: { ttl: 60000, limit: 5 } })
   @UseGuards(IdempotencyGuard)
   @UseInterceptors(IdempotencyInterceptor)
   createOrder(@CurrentUser() user: any, @Body() dto: CreateOrderDto) {
@@ -48,6 +52,7 @@ export class OrderBookController {
   @ApiParam({ name: 'id', description: 'Order ID to cancel' })
   @ApiResponse({ status: 200, description: 'Order cancelled successfully' })
   @ApiResponse({ status: 404, description: 'Order not found' })
+  @Throttle({ short: { ttl: 60000, limit: 5 } })
   cancelOrder(@CurrentUser() user: any, @Param('id') orderId: string) {
     return this.orderBookService.cancelOrder(orderId, user.id);
   }
