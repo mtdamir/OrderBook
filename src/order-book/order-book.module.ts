@@ -8,9 +8,11 @@ import { OrderBookService } from './order-book.service';
 import { OrderQueueService } from './queue/order-queue.service';
 import { OrderRepository } from './repositories/order.repository';
 import { OrderTransactionRepository } from './repositories/order-transaction.repository';
+import { MarketDataModule } from 'src/market-data/market-data.module';
+import { MarketMakerWorker } from './market-maker/market-maker.worker';
 
 @Module({
-  imports: [WalletModule],
+  imports: [WalletModule, MarketDataModule],
   controllers: [OrderBookController],
   providers: [
     OrderBookService,
@@ -20,6 +22,7 @@ import { OrderTransactionRepository } from './repositories/order-transaction.rep
     OrderQueueService,
     FixedOrderProcessor,
     MarketOrderProcessor,
+    MarketMakerWorker
   ],
 })
 export class OrderBookModule {}

@@ -4,8 +4,18 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
-import { OrderStatus, OrderType, PriceType } from '@prisma/client';
+
+import { OrderSource, OrderStatus, OrderType, PriceType } from '@prisma/client';
+
+import Decimal from 'decimal.js';
+
+import {
+  OrderBookDepth,
+  OrderBookLevel,
+} from './interfaces/order-book-depth.interface';
+
 import { PrismaService } from 'src/database/prisma.service';
 import { WalletService } from 'src/wallet/wallet.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -14,14 +24,19 @@ import { FixedOrderProcessor } from './matching-engine/fixed-order.processor';
 import { MarketOrderProcessor } from './matching-engine/market-order.processor';
 import { OrderQueueService } from './queue/order-queue.service';
 import { OrderRepository } from './repositories/order.repository';
+import { OrderBookGateway } from './order-book.gateway';
 
 const DEFAULT_MARKET_SYMBOL = 'USDTIRT';
 
 @Injectable()
-export class OrderBookService implements OnModuleInit {
+export class OrderBookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OrderBookService.name);
 
   private isProcessing = false;
+
+  private readonly broadcastTimers = new Map<string, NodeJS.Timeout>();
+
+  private readonly broadcastDelayMs = 500;
 
   constructor(
     private readonly orderRepo: OrderRepository,
@@ -30,12 +45,21 @@ export class OrderBookService implements OnModuleInit {
     private readonly marketOrderProcessor: MarketOrderProcessor,
     private readonly walletService: WalletService,
     private readonly prisma: PrismaService,
+    private readonly orderBookGateway: OrderBookGateway,
   ) {}
 
   async onModuleInit(): Promise<void> {
     await this.syncQueueWithDB();
 
-    void this.startProcessing();
+    await this.startProcessing();
+  }
+
+  onModuleDestroy() {
+    for (const timer of this.broadcastTimers.values()) {
+      clearTimeout(timer);
+    }
+
+    this.broadcastTimers.clear();
   }
 
   private async syncQueueWithDB(): Promise<void> {
@@ -81,18 +105,50 @@ export class OrderBookService implements OnModuleInit {
       `Processing order: ${task.orderId} | type: ${task.priceType}`,
     );
 
+    const orderWithMarket = await this.prisma.order.findUnique({
+      where: {
+        id: task.orderId,
+      },
+
+      select: {
+        market: {
+          select: {
+            symbol: true,
+          },
+        },
+      },
+    });
+
     if (task.priceType === PriceType.Fixed) {
       await this.fixedOrderProcessor.process(task.orderId);
-
-      return;
+    } else if (task.priceType === PriceType.Market) {
+      await this.marketOrderProcessor.process(task.orderId);
     }
 
-    if (task.priceType === PriceType.Market) {
-      await this.marketOrderProcessor.process(task.orderId);
+    if (orderWithMarket) {
+      this.scheduleOrderBookBroadcast(orderWithMarket.market.symbol);
     }
   }
 
   async createOrder(userId: string, dto: CreateOrderDto) {
+    return this.createOrderWithSource(userId, dto, OrderSource.User);
+  }
+
+  async createMarketMakerOrder(userId: string, dto: CreateOrderDto) {
+    if (dto.priceType !== PriceType.Fixed) {
+      throw new BadRequestException(
+        'Market Maker can only create fixed orders',
+      );
+    }
+
+    return this.createOrderWithSource(userId, dto, OrderSource.MarketMaker);
+  }
+
+  private async createOrderWithSource(
+    userId: string,
+    dto: CreateOrderDto,
+    source: OrderSource,
+  ) {
     const { type, priceType, price, amount, total } = dto;
 
     const marketSymbol = (dto.marketSymbol ?? DEFAULT_MARKET_SYMBOL)
@@ -103,8 +159,10 @@ export class OrderBookService implements OnModuleInit {
 
     this.validateOrderInput(dto);
 
-    const totalPrice = priceType === PriceType.Fixed ? price! * amount! : (total ?? 0);
-
+    const totalPrice =
+      priceType === PriceType.Fixed
+        ? new Decimal(price!).mul(amount!).toNumber()
+        : (total ?? 0);
 
     const order = await this.prisma.$transaction(async (tx) => {
       if (type === OrderType.Buy) {
@@ -137,19 +195,25 @@ export class OrderBookService implements OnModuleInit {
             },
           },
 
+          source,
+
           type,
           priceType,
+
           status: OrderStatus.Queued,
 
           price: price ?? null,
 
           amount: amount ?? 0,
+
           remainingAmount: amount ?? 0,
 
           totalPrice,
+
           remainingTotalPrice: totalPrice,
 
           wage: 0,
+
           remainingWage: 0,
         },
         tx,
@@ -158,13 +222,15 @@ export class OrderBookService implements OnModuleInit {
 
     await this.orderQueueService.pushOrderTask(order.id, order.priceType);
 
-    this.logger.log(`Order created: ${order.id} | market: ${market.symbol}`);
+    this.logger.log(
+      `Order created: ${order.id} | market: ${market.symbol} | source: ${source}`,
+    );
 
     return order;
   }
 
   async cancelOrder(orderId: string, userId: string) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const order = await this.orderRepo.findById(orderId, tx);
 
       if (!order || order.userId !== userId) {
@@ -182,6 +248,7 @@ export class OrderBookService implements OnModuleInit {
         where: {
           id: order.marketId,
         },
+
         include: {
           baseAsset: true,
           quoteAsset: true,
@@ -216,8 +283,123 @@ export class OrderBookService implements OnModuleInit {
         }
       }
 
-      return this.orderRepo.updateStatus(orderId, OrderStatus.Canceled, tx);
+      const canceledOrder = await this.orderRepo.updateStatus(
+        orderId,
+        OrderStatus.Canceled,
+        tx,
+      );
+
+      return {
+        order: canceledOrder,
+        marketSymbol: market.symbol,
+      };
     });
+
+    this.scheduleOrderBookBroadcast(result.marketSymbol);
+
+    return result.order;
+  }
+
+  async getDepth(
+    marketSymbol: string = DEFAULT_MARKET_SYMBOL,
+  ): Promise<OrderBookDepth> {
+    const normalizedMarketSymbol = marketSymbol.trim().toUpperCase();
+
+    const market = await this.findActiveMarket(normalizedMarketSymbol);
+
+    const orders = await this.orderRepo.findOpenOrdersByMarket(market.id);
+
+    const bidLevels = new Map<string, Decimal>();
+
+    const askLevels = new Map<string, Decimal>();
+
+    for (const order of orders) {
+      if (!order.price) {
+        continue;
+      }
+
+      const price = order.price.toString();
+
+      const remainingAmount = new Decimal(order.remainingAmount.toString());
+
+      const target = order.type === OrderType.Buy ? bidLevels : askLevels;
+
+      const currentAmount = target.get(price) ?? new Decimal(0);
+
+      target.set(price, currentAmount.plus(remainingAmount));
+    }
+
+    const createLevel = (price: string, amount: Decimal): OrderBookLevel => {
+      const total = new Decimal(price).mul(amount).toDecimalPlaces(
+        Math.min(Math.max(market.quoteAsset.precision, 0), 8),
+
+        Decimal.ROUND_DOWN,
+      );
+
+      return {
+        price,
+        amount: amount.toFixed(),
+        total: total.toFixed(),
+      };
+    };
+
+    const bids = Array.from(bidLevels.entries())
+      .sort(([firstPrice], [secondPrice]) => {
+        return new Decimal(secondPrice).cmp(new Decimal(firstPrice));
+      })
+      .slice(0, 20)
+      .map(([price, amount]) => {
+        return createLevel(price, amount);
+      });
+
+    const asks = Array.from(askLevels.entries())
+      .sort(([firstPrice], [secondPrice]) => {
+        return new Decimal(firstPrice).cmp(new Decimal(secondPrice));
+      })
+      .slice(0, 20)
+      .map(([price, amount]) => {
+        return createLevel(price, amount);
+      });
+
+    return {
+      marketSymbol: market.symbol,
+
+      bids,
+
+      asks,
+
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  private scheduleOrderBookBroadcast(marketSymbol: string): void {
+    const existingTimer = this.broadcastTimers.get(marketSymbol);
+
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      this.broadcastTimers.delete(marketSymbol);
+
+      void this.broadcastOrderBook(marketSymbol);
+    }, this.broadcastDelayMs);
+
+    this.broadcastTimers.set(marketSymbol, timer);
+  }
+
+  private async broadcastOrderBook(marketSymbol: string): Promise<void> {
+    try {
+      const depth = await this.getDepth(marketSymbol);
+
+      this.orderBookGateway.broadcastOrderBook(depth);
+
+      this.logger.debug(`OrderBook broadcasted: ${marketSymbol}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.error(`OrderBook broadcast failed: ${message}`);
+    }
   }
 
   async getMyOrders(userId: string, filters?: GetMyOrdersDto) {
@@ -244,7 +426,7 @@ export class OrderBookService implements OnModuleInit {
     }
 
     if (!market.baseAsset.isActive || !market.quoteAsset.isActive) {
-      throw new BadRequestException(`Market assets are not active`);
+      throw new BadRequestException('Market assets are not active');
     }
 
     return market;

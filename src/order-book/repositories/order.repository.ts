@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+
 import {
   Order,
+  OrderSource,
   OrderStatus,
   OrderType,
   Prisma,
@@ -30,7 +32,9 @@ export class OrderRepository {
     const client = tx ?? this.prisma;
 
     return client.order.findUnique({
-      where: { id },
+      where: {
+        id,
+      },
     });
   }
 
@@ -42,7 +46,10 @@ export class OrderRepository {
     const client = tx ?? this.prisma;
 
     return client.order.update({
-      where: { id },
+      where: {
+        id,
+      },
+
       data,
     });
   }
@@ -51,8 +58,13 @@ export class OrderRepository {
     const client = tx ?? this.prisma;
 
     return client.order.update({
-      where: { id },
-      data: { status },
+      where: {
+        id,
+      },
+
+      data: {
+        status,
+      },
     });
   }
 
@@ -61,6 +73,36 @@ export class OrderRepository {
       where: {
         status: OrderStatus.Queued,
       },
+      orderBy: {
+        createdAt: 'asc',
+      },
+    });
+  }
+
+  async findOpenMarketMakerOrders(
+    marketId: string,
+    marketMakerUserId: string,
+    tx?: PrismaTransaction,
+  ) {
+    const client = tx ?? this.prisma;
+
+    return client.order.findMany({
+      where: {
+        marketId,
+
+        userId: marketMakerUserId,
+
+        source: OrderSource.MarketMaker,
+
+        status: {
+          in: [
+            OrderStatus.Queued,
+            OrderStatus.Processing,
+            OrderStatus.InProgress,
+          ],
+        },
+      },
+
       orderBy: {
         createdAt: 'asc',
       },
@@ -118,7 +160,6 @@ export class OrderRepository {
       id: {
         not: order.id,
       },
-
       userId: {
         not: order.userId,
       },
@@ -163,6 +204,36 @@ export class OrderRepository {
           createdAt: 'asc',
         },
       ],
+    });
+  }
+
+  async findOpenOrdersByMarket(marketId: string, tx?: PrismaTransaction) {
+    const client = tx ?? this.prisma;
+
+    return client.order.findMany({
+      where: {
+        marketId,
+
+        priceType: PriceType.Fixed,
+
+        status: {
+          in: [OrderStatus.Processing, OrderStatus.InProgress],
+        },
+
+        price: {
+          not: null,
+        },
+
+        remainingAmount: {
+          gt: 0,
+        },
+      },
+
+      select: {
+        type: true,
+        price: true,
+        remainingAmount: true,
+      },
     });
   }
 }
