@@ -1,4 +1,11 @@
-import { Controller, Get, Post, Body, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -6,15 +13,17 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { WalletService } from './wallet.service';
+import { Throttle } from '@nestjs/throttler';
+import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+import { IdempotencyGuard } from 'src/common/guards/idempotency.guard';
+import { IdempotencyInterceptor } from 'src/common/interceptors/idempotency.interceptor';
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
-import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
-import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
-import { Throttle, SkipThrottle } from '@nestjs/throttler';
+import { WalletService } from './wallet.service';
 
 @ApiTags('Wallet')
-@ApiBearerAuth('refresh-token')
+@ApiBearerAuth('access-token')
 @Controller('wallet')
 @UseGuards(JwtAuthGuard)
 export class WalletController {
@@ -22,29 +31,63 @@ export class WalletController {
 
   @Get()
   @ApiOperation({ summary: 'Get wallet balance' })
-  @ApiResponse({ status: 200, description: 'Wallet retrieved successfully' })
-  @ApiResponse({ status: 401, description: 'Unauthorized' })
-  getWallet(@CurrentUser() user: any) {
+  @ApiResponse({
+    status: 200,
+    description: 'Wallet retrieved successfully',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized',
+  })
+  getWallet(@CurrentUser() user: { id: string }) {
     return this.walletService.getWallet(user.id);
   }
 
   @Post('deposit')
+  @UseGuards(IdempotencyGuard)
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Deposit funds into wallet' })
   @ApiBody({ type: DepositDto })
-  @ApiResponse({ status: 201, description: 'Deposit successful' })
-  @ApiResponse({ status: 400, description: 'Bad request' })
-  @Throttle({ short: { ttl: 60000, limit: 10 } }) 
-  deposit(@CurrentUser() user: any, @Body() dto: DepositDto) {
+  @ApiResponse({
+    status: 201,
+    description: 'Deposit successful',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad request',
+  })
+  @Throttle({
+    short: {
+      ttl: 60000,
+      limit: 10,
+    },
+  })
+  deposit(@CurrentUser() user: { id: string }, @Body() dto: DepositDto) {
     return this.walletService.deposit(user.id, dto);
   }
 
   @Post('withdraw')
-  @ApiOperation({ summary: 'Withdraw funds from wallet' })
+  @UseGuards(IdempotencyGuard)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiOperation({
+    summary: 'Withdraw funds from wallet',
+  })
   @ApiBody({ type: WithdrawDto })
-  @ApiResponse({ status: 201, description: 'Withdrawal successful' })
-  @ApiResponse({ status: 400, description: 'Bad request' })
-  @Throttle({ short: { ttl: 60000, limit: 10 } })
-  withdraw(@CurrentUser() user: any, @Body() dto: WithdrawDto) {
+  @ApiResponse({
+    status: 201,
+    description: 'Withdrawal successful',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad request',
+  })
+  @Throttle({
+    short: {
+      ttl: 60000,
+      limit: 10,
+    },
+  })
+  withdraw(@CurrentUser() user: { id: string }, @Body() dto: WithdrawDto) {
     return this.walletService.withdraw(user.id, dto);
   }
 }

@@ -1,28 +1,27 @@
-import {
-  Injectable,
-  NotFoundException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import {ConflictException,Injectable,UnauthorizedException} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { RedisService } from 'src/redis/redis.service';
-import { UserRepository } from 'src/user/repositories/user.repository';
-import { UserService } from 'src/user/user.service';
-import { RegisterDto } from './dto/register.dto';
-import { ConflictException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import { LoginDto } from './dto/login.dto';
+import { createHash } from 'node:crypto';
+import { RedisService } from 'src/redis/redis.service';
+import { UserService } from 'src/user/user.service';
 import { WalletService } from 'src/wallet/wallet.service';
+import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
   constructor(
-    private userService: UserService,
-    private jwtService: JwtService,
-    private redisService: RedisService,
-    private configService: ConfigService,
-    private walletService: WalletService,
+    private readonly userService: UserService,
+    private readonly jwtService: JwtService,
+    private readonly redisService: RedisService,
+    private readonly configService: ConfigService,
+    private readonly walletService: WalletService,
   ) {}
+
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
 
   private async generateTokens(userId: string) {
     const [access_token, refresh_token] = await Promise.all([
@@ -33,6 +32,7 @@ export class AuthService {
           expiresIn: '15m',
         },
       ),
+
       this.jwtService.signAsync(
         { sub: userId },
         {
@@ -42,18 +42,24 @@ export class AuthService {
       ),
     ]);
 
+    const refreshTokenHash = this.hashToken(refresh_token);
+
     await this.redisService.set(
       `refresh_token:${userId}`,
-      refresh_token,
+      refreshTokenHash,
       7 * 24 * 60 * 60,
     );
 
-    return { access_token, refresh_token };
+    return {
+      access_token,
+      refresh_token,
+    };
   }
 
   async register(data: RegisterDto) {
-    const existUser = await this.userService.findByEmail(data.email);
-    if (existUser) {
+    const existingUser = await this.userService.findByEmail(data.email);
+
+    if (existingUser) {
       throw new ConflictException('Email already exists');
     }
 
@@ -68,29 +74,51 @@ export class AuthService {
 
     await this.walletService.createWalletForUser(user.id);
 
-    return await this.generateTokens(user.id);
+    return this.generateTokens(user.id);
   }
 
   async login(data: LoginDto) {
-    const finduser = await this.userService.findByEmail(data.email);
-    if (!finduser) {
+    const user = await this.userService.findByEmail(data.email);
+
+    if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const checkPassword = await bcrypt.compare(
+    const passwordIsValid = await bcrypt.compare(
       data.password,
-      finduser.passwordHash,
+      user.passwordHash,
     );
 
-    if (!checkPassword) {
+    if (!passwordIsValid) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    return await this.generateTokens(finduser.id);
+    return this.generateTokens(user.id);
   }
 
+  async refresh(userId: string, refreshToken: string) {
+    const storedRefreshTokenHash = await this.redisService.get(
+      `refresh_token:${userId}`,
+    );
 
-  async logout(userId:string){
-    return await this.redisService.del(`refresh_token:${userId}`)
+    if (!storedRefreshTokenHash) {
+      throw new UnauthorizedException('Refresh token is invalid or expired');
+    }
+
+    const receivedRefreshTokenHash = this.hashToken(refreshToken);
+
+    if (storedRefreshTokenHash !== receivedRefreshTokenHash) {
+      throw new UnauthorizedException('Refresh token is invalid or expired');
+    }
+
+    return this.generateTokens(userId);
+  }
+
+  async logout(userId: string) {
+    await this.redisService.del(`refresh_token:${userId}`);
+
+    return {
+      message: 'Logged out successfully',
+    };
   }
 }
