@@ -6,8 +6,10 @@ import {
   Prisma,
   PriceType,
 } from '@prisma/client';
+
 import { PrismaService } from 'src/database/prisma.service';
 import { PrismaTransaction } from 'src/database/prisma.types';
+
 import { GetMyOrdersDto } from '../dto/get-orders.dto';
 
 @Injectable()
@@ -18,12 +20,18 @@ export class OrderRepository {
 
   async create(data: Prisma.OrderCreateInput, tx?: PrismaTransaction) {
     const client = tx ?? this.prisma;
-    return client.order.create({ data });
+
+    return client.order.create({
+      data,
+    });
   }
 
   async findById(id: string, tx?: PrismaTransaction) {
     const client = tx ?? this.prisma;
-    return client.order.findUnique({ where: { id } });
+
+    return client.order.findUnique({
+      where: { id },
+    });
   }
 
   async update(
@@ -32,11 +40,16 @@ export class OrderRepository {
     tx?: PrismaTransaction,
   ) {
     const client = tx ?? this.prisma;
-    return client.order.update({ where: { id }, data });
+
+    return client.order.update({
+      where: { id },
+      data,
+    });
   }
 
   async updateStatus(id: string, status: OrderStatus, tx?: PrismaTransaction) {
     const client = tx ?? this.prisma;
+
     return client.order.update({
       where: { id },
       data: { status },
@@ -45,8 +58,12 @@ export class OrderRepository {
 
   async findQueuedOrders() {
     return this.prisma.order.findMany({
-      where: { status: OrderStatus.Queued },
-      orderBy: { createdAt: 'asc' },
+      where: {
+        status: OrderStatus.Queued,
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
     });
   }
 
@@ -57,11 +74,33 @@ export class OrderRepository {
     return this.prisma.order.findMany({
       where: {
         userId,
-        ...(filters?.status && { status: filters.status }),
-        ...(filters?.type && { type: filters.type }),
-        ...(filters?.priceType && { priceType: filters.priceType }),
+
+        ...(filters?.status && {
+          status: filters.status,
+        }),
+
+        ...(filters?.type && {
+          type: filters.type,
+        }),
+
+        ...(filters?.priceType && {
+          priceType: filters.priceType,
+        }),
       },
-      orderBy: { createdAt: 'desc' },
+
+      include: {
+        market: {
+          include: {
+            baseAsset: true,
+            quoteAsset: true,
+          },
+        },
+      },
+
+      orderBy: {
+        createdAt: 'desc',
+      },
+
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -69,27 +108,60 @@ export class OrderRepository {
 
   async findMatchingOrders(order: Order, tx?: PrismaTransaction) {
     const client = tx ?? this.prisma;
+
     const oppositeType =
       order.type === OrderType.Buy ? OrderType.Sell : OrderType.Buy;
 
-    const baseWhere: Prisma.OrderWhereInput = {
+    const where: Prisma.OrderWhereInput = {
+      marketId: order.marketId,
+
+      id: {
+        not: order.id,
+      },
+
+      userId: {
+        not: order.userId,
+      },
+
       type: oppositeType,
-      status: { in: [OrderStatus.Processing, OrderStatus.InProgress] },
+
+      priceType: PriceType.Fixed,
+
+      status: {
+        in: [OrderStatus.Processing, OrderStatus.InProgress],
+      },
+
+      remainingAmount: {
+        gt: 0,
+      },
+
+      price: {
+        not: null,
+      },
     };
 
     if (order.priceType === PriceType.Fixed && order.price) {
-      if (order.type === OrderType.Buy) {
-        baseWhere.price = { lte: order.price };
-      } else {
-        baseWhere.price = { gte: order.price };
-      }
+      where.price =
+        order.type === OrderType.Buy
+          ? {
+              not: null,
+              lte: order.price,
+            }
+          : {
+              not: null,
+              gte: order.price,
+            };
     }
 
     return client.order.findMany({
-      where: baseWhere,
+      where,
       orderBy: [
-        { price: order.type === OrderType.Buy ? 'asc' : 'desc' },
-        { createdAt: 'asc' },
+        {
+          price: order.type === OrderType.Buy ? 'asc' : 'desc',
+        },
+        {
+          createdAt: 'asc',
+        },
       ],
     });
   }

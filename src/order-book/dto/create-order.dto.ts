@@ -5,7 +5,11 @@ import {
   IsNumber,
   IsPositive,
   ValidateIf,
+  Matches,
+  IsOptional,
+  IsString
 } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateOrderDto {
@@ -73,4 +77,18 @@ export class CreateOrderDto {
   )
   @IsPositive({message: 'Total must be greater than zero'})
   total?: number;
+
+
+  @ApiPropertyOptional({example: 'USDTIRT',default: 'USDTIRT',description: 'Market symbol'})
+  @IsOptional()
+  @Transform(({ value }) =>
+    typeof value === 'string'
+      ? value.trim().toUpperCase()
+      : value,
+  )
+  @IsString()
+  @Matches(/^[A-Z0-9]{4,40}$/, {
+    message: 'Market symbol is invalid',
+  })
+  marketSymbol?: string;
 }

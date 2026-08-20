@@ -2,22 +2,29 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+
 import {
   ApiBearerAuth,
   ApiBody,
   ApiOperation,
+  ApiParam,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+
 import { Throttle } from '@nestjs/throttler';
+
 import { CurrentUser } from 'src/auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
+
 import { IdempotencyGuard } from 'src/common/guards/idempotency.guard';
 import { IdempotencyInterceptor } from 'src/common/interceptors/idempotency.interceptor';
+
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
 import { WalletService } from './wallet.service';
@@ -30,24 +37,73 @@ export class WalletController {
   constructor(private readonly walletService: WalletService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get wallet balance' })
+  @ApiOperation({
+    summary: 'Get default IRT wallet',
+  })
   @ApiResponse({
     status: 200,
-    description: 'Wallet retrieved successfully',
+    description: 'IRT wallet retrieved successfully',
   })
   @ApiResponse({
     status: 401,
     description: 'Unauthorized',
   })
-  getWallet(@CurrentUser() user: { id: string }) {
-    return this.walletService.getWallet(user.id);
+  getDefaultWallet(@CurrentUser() user: { id: string }) {
+    return this.walletService.getWallet(user.id, 'IRT');
+  }
+
+  @Get('all')
+  @ApiOperation({
+    summary: 'Get all user wallets',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User wallets retrieved successfully',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized',
+  })
+  getAllWallets(@CurrentUser() user: { id: string }) {
+    return this.walletService.getWallets(user.id);
+  }
+
+  @Get(':assetSymbol')
+  @ApiOperation({
+    summary: 'Get wallet by asset symbol',
+  })
+  @ApiParam({
+    name: 'assetSymbol',
+    example: 'USDT',
+    description: 'Asset symbol',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Wallet retrieved successfully',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Wallet not found',
+  })
+  getWalletByAsset(
+    @CurrentUser() user: { id: string },
+    @Param('assetSymbol') assetSymbol: string,
+  ) {
+    return this.walletService.getWallet(
+      user.id,
+      assetSymbol.trim().toUpperCase(),
+    );
   }
 
   @Post('deposit')
   @UseGuards(IdempotencyGuard)
   @UseInterceptors(IdempotencyInterceptor)
-  @ApiOperation({ summary: 'Deposit funds into wallet' })
-  @ApiBody({ type: DepositDto })
+  @ApiOperation({
+    summary: 'Deposit IRT into wallet',
+  })
+  @ApiBody({
+    type: DepositDto,
+  })
   @ApiResponse({
     status: 201,
     description: 'Deposit successful',
@@ -70,9 +126,11 @@ export class WalletController {
   @UseGuards(IdempotencyGuard)
   @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
-    summary: 'Withdraw funds from wallet',
+    summary: 'Withdraw IRT from wallet',
   })
-  @ApiBody({ type: WithdrawDto })
+  @ApiBody({
+    type: WithdrawDto,
+  })
   @ApiResponse({
     status: 201,
     description: 'Withdrawal successful',

@@ -26,6 +26,11 @@ enum OrderStatus {
   Canceled
 }
 
+enum OrderSource {
+  User
+  MarketMaker
+}
+
 enum WalletLogAction {
   Deposit
   Withdraw
@@ -35,7 +40,7 @@ enum WalletLogAction {
   OrderCredit
 }
 
-// ─── Models ──────────────────────────────────────
+// ─── User ────────────────────────────────────────
 
 model User {
   id           String   @id @default(cuid())
@@ -45,65 +50,136 @@ model User {
   lastName     String
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  wallet Wallet?
-  orders Order[]
+  wallets Wallet[]
+  orders  Order[]
 }
+
+// ─── Assets ──────────────────────────────────────
+
+model Asset {
+  id        String   @id @default(cuid())
+  symbol    String   @unique @db.VarChar(20)
+  name      String
+  precision Int      @default(8)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wallets      Wallet[]
+  baseMarkets  Market[] @relation("BaseAssetMarkets")
+  quoteMarkets Market[] @relation("QuoteAssetMarkets")
+}
+
+// ─── Markets ─────────────────────────────────────
+
+model Market {
+  id              String   @id @default(cuid())
+  symbol          String   @unique @db.VarChar(40)
+  baseAssetId     String
+  quoteAssetId    String
+  pricePrecision  Int      @default(0)
+  amountPrecision Int      @default(8)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  baseAsset  Asset @relation("BaseAssetMarkets", fields: [baseAssetId], references: [id], onDelete: Restrict)
+  quoteAsset Asset @relation("QuoteAssetMarkets", fields: [quoteAssetId], references: [id], onDelete: Restrict)
+
+  orders Order[]
+
+  @@unique([baseAssetId, quoteAssetId])
+  @@index([isActive])
+}
+
+// ─── Wallets ─────────────────────────────────────
 
 model Wallet {
-  id            String  @id @default(cuid())
-  balance       Decimal @default(0) @db.Decimal(20, 8)
-  frozenBalance Decimal @default(0) @db.Decimal(20, 8)
-  userId        String  @unique
+  id            String   @id @default(cuid())
+  userId        String
+  assetId       String
+  balance       Decimal  @default(0) @db.Decimal(30, 8)
+  frozenBalance Decimal  @default(0) @db.Decimal(30, 8)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  user User       @relation(fields: [userId], references: [id])
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
   logs WalletLog[]
+
+  @@unique([userId, assetId])
+  @@index([userId])
+  @@index([assetId])
 }
+
+// ─── Wallet Logs ─────────────────────────────────
 
 model WalletLog {
   id            String          @id @default(cuid())
   walletId      String
-  amount        Decimal         @db.Decimal(20, 8)
+  amount        Decimal         @db.Decimal(30, 8)
   action        WalletLogAction
-  balanceBefore Decimal         @db.Decimal(20, 8)
-  balanceAfter  Decimal         @db.Decimal(20, 8)
+  balanceBefore Decimal         @db.Decimal(30, 8)
+  balanceAfter  Decimal         @db.Decimal(30, 8)
   createdAt     DateTime        @default(now())
 
-  wallet Wallet @relation(fields: [walletId], references: [id])
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId, createdAt])
 }
+
+// ─── Orders ──────────────────────────────────────
 
 model Order {
   id                  String      @id @default(cuid())
   userId              String
+  marketId            String
   type                OrderType
   priceType           PriceType
   status              OrderStatus
-  price               Decimal?    @db.Decimal(20, 8)
-  amount              Decimal     @db.Decimal(20, 8)
-  remainingAmount     Decimal     @db.Decimal(20, 8)
-  totalPrice          Decimal     @db.Decimal(20, 8)
-  remainingTotalPrice Decimal     @db.Decimal(20, 8)
-  wage                Decimal     @db.Decimal(20, 8)
-  remainingWage       Decimal     @db.Decimal(20, 8)
-  avgPrice            Decimal?    @db.Decimal(20, 8)
+  source              OrderSource @default(User)
+  price               Decimal?    @db.Decimal(30, 8)
+  amount              Decimal     @db.Decimal(30, 8)
+  remainingAmount     Decimal     @db.Decimal(30, 8)
+  totalPrice          Decimal     @db.Decimal(30, 8)
+  remainingTotalPrice Decimal     @db.Decimal(30, 8)
+  wage                Decimal     @db.Decimal(30, 8)
+  remainingWage       Decimal     @db.Decimal(30, 8)
+  avgPrice            Decimal?    @db.Decimal(30, 8)
   createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
-  user             User               @relation(fields: [userId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  market Market @relation(fields: [marketId], references: [id], onDelete: Restrict)
+
   buyTransactions  OrderTransaction[] @relation("BuyTransactions")
   sellTransactions OrderTransaction[] @relation("SellTransactions")
+
+  @@index([userId, createdAt])
+  @@index([marketId, type, status, price])
+  @@index([status, createdAt])
 }
+
+// ─── Order Transactions ──────────────────────────
 
 model OrderTransaction {
   id          String   @id @default(cuid())
   buyOrderId  String
   sellOrderId String
-  amount      Decimal  @db.Decimal(20, 8)
-  price       Decimal  @db.Decimal(20, 8)
-  totalPrice  Decimal  @db.Decimal(20, 8)
-  buyerFee    Decimal  @db.Decimal(20, 8)
-  sellerFee   Decimal  @db.Decimal(20, 8)
+  amount      Decimal  @db.Decimal(30, 8)
+  price       Decimal  @db.Decimal(30, 8)
+  totalPrice  Decimal  @db.Decimal(30, 8)
+  buyerFee    Decimal  @db.Decimal(30, 8)
+  sellerFee   Decimal  @db.Decimal(30, 8)
   createdAt   DateTime @default(now())
 
-  buyOrder  Order @relation("BuyTransactions", fields: [buyOrderId], references: [id])
-  sellOrder Order @relation("SellTransactions", fields: [sellOrderId], references: [id])
+  buyOrder  Order @relation("BuyTransactions", fields: [buyOrderId], references: [id], onDelete: Restrict)
+  sellOrder Order @relation("SellTransactions", fields: [sellOrderId], references: [id], onDelete: Restrict)
+
+  @@index([buyOrderId])
+  @@index([sellOrderId])
+  @@index([createdAt])
 }

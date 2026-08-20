@@ -1,11 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { WalletRepository } from './repositories/wallet.repository';
-import { WalletLogRepository } from './repositories/wallet-log.repository';
+import {
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
+import { WalletLogAction } from '@prisma/client';
+import { PrismaService } from 'src/database/prisma.service';
+import { PrismaTransaction } from 'src/database/prisma.types';
 import { DepositDto } from './dto/deposit.dto';
 import { WithdrawDto } from './dto/withdraw.dto';
-import { PrismaService } from 'src/database/prisma.service';
-import { WalletLogAction } from '@prisma/client';
-import { PrismaTransaction } from 'src/database/prisma.types';
+import { WalletLogRepository } from './repositories/wallet-log.repository';
+import { WalletRepository } from './repositories/wallet.repository';
+
+const DEFAULT_DEPOSIT_ASSET = 'IRT';
 
 @Injectable()
 export class WalletService {
@@ -15,22 +21,22 @@ export class WalletService {
     private readonly walletLogRepo: WalletLogRepository,
   ) {}
 
-  async getWallet(userId: string) {
-    const wallet = await this.walletRepo.findByUserId(userId);
-    if (!wallet) {
-      throw new NotFoundException(`Wallet not found`);
-    }
-    return wallet;
+  async getWallets(userId: string) {
+    return this.walletRepo.findAllByUserId(userId);
+  }
+
+  async getWallet(userId: string, assetSymbol = DEFAULT_DEPOSIT_ASSET) {
+    return this.findWalletOrThrow(userId, assetSymbol);
   }
 
   async deposit(userId: string, dto: DepositDto) {
-    const wallet = await this.walletRepo.findByUserId(userId);
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      const wallet = await this.findWalletOrThrow(
+        userId,
+        DEFAULT_DEPOSIT_ASSET,
+        tx,
+      );
+
       const balanceBefore = wallet.balance;
 
       const updated = await this.walletRepo.increaseBalance(
@@ -59,13 +65,13 @@ export class WalletService {
   }
 
   async withdraw(userId: string, dto: WithdrawDto) {
-    const wallet = await this.walletRepo.findByUserId(userId);
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
-
     return this.prisma.$transaction(async (tx) => {
+      const wallet = await this.findWalletOrThrow(
+        userId,
+        DEFAULT_DEPOSIT_ASSET,
+        tx,
+      );
+
       const balanceBefore = wallet.balance;
 
       const updated = await this.walletRepo.decreaseBalance(
@@ -93,47 +99,106 @@ export class WalletService {
     });
   }
 
-  async creditBalance(userId: string, amount: number, tx: PrismaTransaction) {
-    const wallet = await this.getWallet(userId);
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+  async creditBalance(
+    userId: string,
+    assetSymbol: string,
+    amount: number,
+    tx: PrismaTransaction,
+  ) {
+    const wallet = await this.findWalletOrThrow(userId, assetSymbol, tx);
 
     return this.walletRepo.increaseBalance(wallet.id, amount, tx);
   }
 
-  async freeze(userId: string, amount: number, tx: PrismaTransaction) {
-    const wallet = await this.walletRepo.findByUserId(userId);
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+  async freeze(
+    userId: string,
+    assetSymbol: string,
+    amount: number,
+    tx: PrismaTransaction,
+  ) {
+    const wallet = await this.findWalletOrThrow(userId, assetSymbol, tx);
 
     return this.walletRepo.freeze(wallet.id, amount, tx);
   }
 
-  async unfreeze(userId: string, amount: number, tx: PrismaTransaction) {
-    const wallet = await this.walletRepo.findByUserId(userId);
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+  async unfreeze(
+    userId: string,
+    assetSymbol: string,
+    amount: number,
+    tx: PrismaTransaction,
+  ) {
+    const wallet = await this.findWalletOrThrow(userId, assetSymbol, tx);
 
     return this.walletRepo.unfreeze(wallet.id, amount, tx);
   }
 
-  async deductFrozen(userId: string, amount: number, tx: PrismaTransaction) {
-    const wallet = await this.walletRepo.findByUserId(userId);
-
-    if (!wallet) {
-      throw new NotFoundException('Wallet not found');
-    }
+  async deductFrozen(
+    userId: string,
+    assetSymbol: string,
+    amount: number,
+    tx: PrismaTransaction,
+  ) {
+    const wallet = await this.findWalletOrThrow(userId, assetSymbol, tx);
 
     return this.walletRepo.deductFrozen(wallet.id, amount, tx);
   }
 
   async createWalletForUser(userId: string, tx?: PrismaTransaction) {
-    return this.walletRepo.create(userId, tx);
+    const client = tx ?? this.prisma;
+
+    const activeAssets = await client.asset.findMany({
+      where: {
+        isActive: true,
+      },
+      select: {
+        id: true,
+        symbol: true,
+      },
+      orderBy: {
+        symbol: 'asc',
+      },
+    });
+
+    if (activeAssets.length === 0) {
+      throw new InternalServerErrorException('No active assets are configured');
+    }
+
+    const wallets: Awaited<
+      ReturnType<WalletRepository['createIfNotExists']>
+    >[] = [];
+
+    for (const asset of activeAssets) {
+      const wallet = await this.walletRepo.createIfNotExists(
+        userId,
+        asset.id,
+        tx,
+      );
+
+      wallets.push(wallet);
+    }
+
+    return wallets;
+  }
+
+  private async findWalletOrThrow(
+    userId: string,
+    assetSymbol: string,
+    tx?: PrismaTransaction,
+  ) {
+    const normalizedSymbol = assetSymbol.trim().toUpperCase();
+
+    const wallet = await this.walletRepo.findByUserAndAssetSymbol(
+      userId,
+      normalizedSymbol,
+      tx,
+    );
+
+    if (!wallet) {
+      throw new NotFoundException(
+        `Wallet for asset ${normalizedSymbol} not found`,
+      );
+    }
+
+    return wallet;
   }
 }

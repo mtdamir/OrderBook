@@ -1,12 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { OrderStatus, OrderType, PriceType } from '@prisma/client';
 import Decimal from 'decimal.js';
-
 import { PrismaService } from 'src/database/prisma.service';
 import { WalletService } from 'src/wallet/wallet.service';
-
-import { OrderRepository } from '../repositories/order.repository';
 import { OrderTransactionRepository } from '../repositories/order-transaction.repository';
+import { OrderRepository } from '../repositories/order.repository';
 
 @Injectable()
 export class FixedOrderProcessor {
@@ -25,37 +23,53 @@ export class FixedOrderProcessor {
 
       if (!order) {
         this.logger.warn(`Order ${orderId} not found`);
+
         return;
       }
 
-      // Process only queued orders on first pass
       if (order.status !== OrderStatus.Queued) {
         return;
       }
 
-      // This processor handles fixed orders only
       if (order.priceType !== PriceType.Fixed) {
         return;
       }
 
       if (!order.price) {
         this.logger.warn(`Fixed order ${orderId} has no price`);
+
         return;
       }
 
-      // Mark the order as processing
+      const market = await tx.market.findUnique({
+        where: {
+          id: order.marketId,
+        },
+        include: {
+          baseAsset: true,
+          quoteAsset: true,
+        },
+      });
+
+      if (!market) {
+        this.logger.error(
+          `Market ${order.marketId} not found for order ${order.id}`,
+        );
+
+        return;
+      }
+
+      const baseAssetSymbol = market.baseAsset.symbol;
+
+      const quoteAssetSymbol = market.quoteAsset.symbol;
+
       await this.orderRepo.updateStatus(order.id, OrderStatus.Processing, tx);
 
-      /*
-       * Use local decimals to avoid mutating the Prisma object.
-       */
       let remainingAmount = new Decimal(order.remainingAmount.toString());
 
       let remainingTotalPrice = new Decimal(
         order.remainingTotalPrice.toString(),
       );
-
-      // Find matching orders
 
       const orderForMatching = {
         ...order,
@@ -67,14 +81,17 @@ export class FixedOrderProcessor {
         tx,
       );
 
-      // Match orders
-
       for (const matchedOrder of matchedOrders) {
-        /*
-         * Stop if the main order is already fully filled.
-         */
         if (remainingAmount.lte(0)) {
           break;
+        }
+
+        if (matchedOrder.marketId !== order.marketId) {
+          continue;
+        }
+
+        if (matchedOrder.userId === order.userId) {
+          continue;
         }
 
         if (!matchedOrder.price) {
@@ -95,8 +112,6 @@ export class FixedOrderProcessor {
           continue;
         }
 
-        // Calculate trade amount
-
         const transactionAmount = Decimal.min(
           remainingAmount,
           matchedRemainingAmount,
@@ -106,56 +121,39 @@ export class FixedOrderProcessor {
           continue;
         }
 
-        /*
-         * The trade price comes from the matched order.
-         */
         const transactionTotalPrice = transactionAmount.mul(matchedPrice);
-
-        // Determine buyer and seller
 
         const buyOrder = order.type === OrderType.Buy ? order : matchedOrder;
 
         const sellOrder = order.type === OrderType.Sell ? order : matchedOrder;
 
-        // Settle wallet balances
-
-        /*
-         * On createOrder:
-         * buy orders freeze funds and sell orders freeze assets.
-         * After a trade, the buyer uses frozen funds and the seller uses frozen assets.
-         */
-
         await this.walletService.deductFrozen(
           buyOrder.userId,
+          quoteAssetSymbol,
           transactionTotalPrice.toNumber(),
           tx,
         );
 
         await this.walletService.deductFrozen(
           sellOrder.userId,
+          baseAssetSymbol,
           transactionAmount.toNumber(),
           tx,
         );
 
-        /*
-         * Seller receives the payment.
-         */
         await this.walletService.creditBalance(
           sellOrder.userId,
+          quoteAssetSymbol,
           transactionTotalPrice.toNumber(),
           tx,
         );
 
-        /*
-         * Buyer receives the purchased asset.
-         */
         await this.walletService.creditBalance(
           buyOrder.userId,
+          baseAssetSymbol,
           transactionAmount.toNumber(),
           tx,
         );
-
-        // Record transaction
 
         await this.orderTransactionRepo.create(
           {
@@ -172,6 +170,7 @@ export class FixedOrderProcessor {
             },
 
             amount: transactionAmount.toNumber(),
+
             price: matchedPrice.toNumber(),
 
             totalPrice: transactionTotalPrice.toNumber(),
@@ -182,13 +181,8 @@ export class FixedOrderProcessor {
           tx,
         );
 
-        // Update main order
-
         remainingAmount = remainingAmount.minus(transactionAmount);
 
-        /*
-         * remainingTotalPrice matters for buy orders because unused funds can be released later.
-         */
         if (order.type === OrderType.Buy) {
           remainingTotalPrice = remainingTotalPrice.minus(
             transactionTotalPrice,
@@ -197,16 +191,11 @@ export class FixedOrderProcessor {
 
         const mainOrderFinished = remainingAmount.lte(0);
 
-        // Update matched order
-
         const newMatchedRemainingAmount =
           matchedRemainingAmount.minus(transactionAmount);
 
         const matchedOrderFinished = newMatchedRemainingAmount.lte(0);
 
-        /*
-         * If the matched order is a buy, calculate its remaining frozen funds.
-         */
         let matchedRemainingTotalPrice = new Decimal(
           matchedOrder.remainingTotalPrice.toString(),
         );
@@ -217,8 +206,6 @@ export class FixedOrderProcessor {
           );
         }
 
-        // Release extra funds if the matched buy is fully filled
-
         if (
           matchedOrder.type === OrderType.Buy &&
           matchedOrderFinished &&
@@ -226,14 +213,13 @@ export class FixedOrderProcessor {
         ) {
           await this.walletService.unfreeze(
             matchedOrder.userId,
+            quoteAssetSymbol,
             matchedRemainingTotalPrice.toNumber(),
             tx,
           );
 
           matchedRemainingTotalPrice = new Decimal(0);
         }
-
-        // Save matched order
 
         await this.orderRepo.update(
           matchedOrder.id,
@@ -257,8 +243,6 @@ export class FixedOrderProcessor {
           tx,
         );
 
-        // Save main order state
-
         await this.orderRepo.update(
           order.id,
           {
@@ -278,19 +262,16 @@ export class FixedOrderProcessor {
           tx,
         );
 
-        // Main order is fully filled
-
         if (mainOrderFinished) {
           break;
         }
       }
 
-      // Finalize main order
-
       if (remainingAmount.lte(0)) {
         if (order.type === OrderType.Buy && remainingTotalPrice.gt(0)) {
           await this.walletService.unfreeze(
             order.userId,
+            quoteAssetSymbol,
             remainingTotalPrice.toNumber(),
             tx,
           );
@@ -316,12 +297,6 @@ export class FixedOrderProcessor {
 
         return;
       }
-
-      // Order remains open
-
-      /*
-       * Keep the remaining funds frozen so the order can match later.
-       */
 
       await this.orderRepo.update(
         order.id,

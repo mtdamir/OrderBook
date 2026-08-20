@@ -8,12 +8,14 @@ import {
 import { OrderStatus, OrderType, PriceType } from '@prisma/client';
 import { PrismaService } from 'src/database/prisma.service';
 import { WalletService } from 'src/wallet/wallet.service';
+import { CreateOrderDto } from './dto/create-order.dto';
+import { GetMyOrdersDto } from './dto/get-orders.dto';
 import { FixedOrderProcessor } from './matching-engine/fixed-order.processor';
 import { MarketOrderProcessor } from './matching-engine/market-order.processor';
 import { OrderQueueService } from './queue/order-queue.service';
 import { OrderRepository } from './repositories/order.repository';
-import { CreateOrderDto } from './dto/create-order.dto';
-import { GetMyOrdersDto } from './dto/get-orders.dto';
+
+const DEFAULT_MARKET_SYMBOL = 'USDTIRT';
 
 @Injectable()
 export class OrderBookService implements OnModuleInit {
@@ -61,7 +63,9 @@ export class OrderBookService implements OnModuleInit {
       try {
         await this.processNextOrder();
       } catch (error) {
-        this.logger.error(`Error processing order: ${error}`);
+        const message = error instanceof Error ? error.message : String(error);
+
+        this.logger.error(`Error processing order: ${message}`);
       }
     }
   }
@@ -91,38 +95,32 @@ export class OrderBookService implements OnModuleInit {
   async createOrder(userId: string, dto: CreateOrderDto) {
     const { type, priceType, price, amount, total } = dto;
 
-    // Validate fixed order
-    if (priceType === PriceType.Fixed) {
-      if (!price) {
-        throw new BadRequestException('Price is required for fixed orders');
-      }
+    const marketSymbol = (dto.marketSymbol ?? DEFAULT_MARKET_SYMBOL)
+      .trim()
+      .toUpperCase();
 
-      if (!amount) {
-        throw new BadRequestException('Amount is required for fixed orders');
-      }
-    }
+    const market = await this.findActiveMarket(marketSymbol);
 
-    // Validate market buy
-    if (priceType === PriceType.Market && type === OrderType.Buy && !total) {
-      throw new BadRequestException('Total is required for market buy orders');
-    }
+    this.validateOrderInput(dto);
 
-    // Validate market sell
-    if (priceType === PriceType.Market && type === OrderType.Sell && !amount) {
-      throw new BadRequestException(
-        'Amount is required for market sell orders',
-      );
-    }
+    const totalPrice = priceType === PriceType.Fixed ? price! * amount! : (total ?? 0);
 
-    const totalPrice =
-      priceType === PriceType.Fixed ? price! * amount! : (total ?? 0);
 
-    // Freeze balance and create order atomically
     const order = await this.prisma.$transaction(async (tx) => {
       if (type === OrderType.Buy) {
-        await this.walletService.freeze(userId, totalPrice, tx);
+        await this.walletService.freeze(
+          userId,
+          market.quoteAsset.symbol,
+          totalPrice,
+          tx,
+        );
       } else {
-        await this.walletService.freeze(userId, amount!, tx);
+        await this.walletService.freeze(
+          userId,
+          market.baseAsset.symbol,
+          amount!,
+          tx,
+        );
       }
 
       return this.orderRepo.create(
@@ -130,6 +128,12 @@ export class OrderBookService implements OnModuleInit {
           user: {
             connect: {
               id: userId,
+            },
+          },
+
+          market: {
+            connect: {
+              id: market.id,
             },
           },
 
@@ -152,10 +156,9 @@ export class OrderBookService implements OnModuleInit {
       );
     });
 
-    // Add committed order to Redis queue
     await this.orderQueueService.pushOrderTask(order.id, order.priceType);
 
-    this.logger.log(`Order created and queued: ${order.id}`);
+    this.logger.log(`Order created: ${order.id} | market: ${market.symbol}`);
 
     return order;
   }
@@ -164,11 +167,7 @@ export class OrderBookService implements OnModuleInit {
     return this.prisma.$transaction(async (tx) => {
       const order = await this.orderRepo.findById(orderId, tx);
 
-      if (!order) {
-        throw new NotFoundException('Order not found');
-      }
-
-      if (order.userId !== userId) {
+      if (!order || order.userId !== userId) {
         throw new NotFoundException('Order not found');
       }
 
@@ -179,27 +178,99 @@ export class OrderBookService implements OnModuleInit {
         throw new BadRequestException('Cannot cancel this order');
       }
 
-      // Return frozen balance
-      if (order.type === OrderType.Buy) {
-        await this.walletService.unfreeze(
-          userId,
-          Number(order.remainingTotalPrice),
-          tx,
-        );
-      } else {
-        await this.walletService.unfreeze(
-          userId,
-          Number(order.remainingAmount),
-          tx,
-        );
+      const market = await tx.market.findUnique({
+        where: {
+          id: order.marketId,
+        },
+        include: {
+          baseAsset: true,
+          quoteAsset: true,
+        },
+      });
+
+      if (!market) {
+        throw new NotFoundException('Order market not found');
       }
 
-      // Cancel order
+      if (order.type === OrderType.Buy) {
+        const remainingQuoteAmount = Number(order.remainingTotalPrice);
+
+        if (remainingQuoteAmount > 0) {
+          await this.walletService.unfreeze(
+            userId,
+            market.quoteAsset.symbol,
+            remainingQuoteAmount,
+            tx,
+          );
+        }
+      } else {
+        const remainingBaseAmount = Number(order.remainingAmount);
+
+        if (remainingBaseAmount > 0) {
+          await this.walletService.unfreeze(
+            userId,
+            market.baseAsset.symbol,
+            remainingBaseAmount,
+            tx,
+          );
+        }
+      }
+
       return this.orderRepo.updateStatus(orderId, OrderStatus.Canceled, tx);
     });
   }
 
   async getMyOrders(userId: string, filters?: GetMyOrdersDto) {
     return this.orderRepo.findByUserId(userId, filters);
+  }
+
+  private async findActiveMarket(marketSymbol: string) {
+    const market = await this.prisma.market.findUnique({
+      where: {
+        symbol: marketSymbol,
+      },
+      include: {
+        baseAsset: true,
+        quoteAsset: true,
+      },
+    });
+
+    if (!market) {
+      throw new NotFoundException(`Market ${marketSymbol} not found`);
+    }
+
+    if (!market.isActive) {
+      throw new BadRequestException(`Market ${marketSymbol} is not active`);
+    }
+
+    if (!market.baseAsset.isActive || !market.quoteAsset.isActive) {
+      throw new BadRequestException(`Market assets are not active`);
+    }
+
+    return market;
+  }
+
+  private validateOrderInput(dto: CreateOrderDto): void {
+    const { type, priceType, price, amount, total } = dto;
+
+    if (priceType === PriceType.Fixed) {
+      if (!price) {
+        throw new BadRequestException('Price is required for fixed orders');
+      }
+
+      if (!amount) {
+        throw new BadRequestException('Amount is required for fixed orders');
+      }
+    }
+
+    if (priceType === PriceType.Market && type === OrderType.Buy && !total) {
+      throw new BadRequestException('Total is required for market buy orders');
+    }
+
+    if (priceType === PriceType.Market && type === OrderType.Sell && !amount) {
+      throw new BadRequestException(
+        'Amount is required for market sell orders',
+      );
+    }
   }
 }
