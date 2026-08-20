@@ -1,287 +1,260 @@
-﻿# 📈 P2P OrderBook
+📈 P2P OrderBook
 
-A  **Peer-to-Peer OrderBook system** built with NestJS, PostgreSQL, and Redis. Supports fixed-price and market orders with a Redis-backed matching engine.
+A backend-focused peer-to-peer order book built with NestJS, PostgreSQL, Prisma, Redis, and Socket.IO.
 
----
+The project supports multi-asset wallets, fixed and market orders, Redis-backed order processing, live USDT/IRT market data, an experimental market maker, and real-time order book updates.
 
-## 🚀 Tech Stack
+The default market is USDTIRT, where USDT is the base asset and IRT is the quote asset.
 
-| Layer | Technology |
-|---|---|
-| Framework | NestJS + TypeScript |
-| Database | PostgreSQL + Prisma v7 |
-| Cache / Queue | Redis (ioredis) |
-| Auth | JWT (Access + Refresh Token) |
-| Validation | class-validator + class-transformer |
-| Docs | Swagger / OpenAPI |
-| Security | Helmet, ThrottlerGuard, Idempotency |
+🚀 Tech Stack
 
----
+Layer
 
-## 📁 Project Structure
+Technology
 
-```
+Framework
+
+NestJS 11 + TypeScript
+
+Database
+
+PostgreSQL + Prisma 7
+
+Cache / Queue
+
+Redis + ioredis
+
+Authentication
+
+JWT Access & Refresh Tokens
+
+Real-time
+
+Socket.IO
+
+Validation
+
+class-validator + class-transformer
+
+API Docs
+
+Swagger / OpenAPI
+
+Testing
+
+Jest + Supertest
+
+✨ Main Features
+
+Dynamic Asset and Market models
+
+Separate wallet for every user and asset
+
+Available and frozen wallet balances
+
+Fixed (Limit) and Market orders
+
+Price-time-priority matching engine
+
+Crash-safe Redis order queue
+
+Atomic wallet settlement with Prisma transactions
+
+Access and Refresh Token authentication
+
+Redis-based Idempotency for sensitive operations
+
+Live USDT/IRT reference price cached in Redis
+
+Experimental market maker for development liquidity
+
+Public Bid/Ask market depth endpoint
+
+Real-time OrderBook updates with Socket.IO
+
+📁 Project Structure
+
 src/
-├── auth/                        # JWT authentication
+├── auth/                       # Login, register, refresh and JWT guards
 │   ├── decorators/
 │   ├── dto/
 │   ├── guards/
 │   └── strategies/
-├── common/                      # Shared utilities
+├── common/                     # Shared idempotency components
 │   ├── guards/
-│   │   └── idempotency.guard.ts
 │   ├── idempotency/
-│   │   └── idempotency.service.ts
 │   └── interceptors/
-│       └── idempotency.interceptor.ts
-├── database/
-│   ├── prisma.service.ts
-│   └── prisma.types.ts          # PrismaTransaction type
+├── database/                   # Prisma service and transaction types
+├── market-data/                # External price and market maker workers
+│   ├── providers/
+│   ├── market-price.service.ts
+│   ├── market-price.worker.ts
+│   └── market-maker.worker.ts
 ├── order-book/
 │   ├── dto/
-│   ├── matching-engine/
-│   │   ├── fixed-order.processor.ts
-│   │   └── market-order.processor.ts
-│   ├── queue/
-│   │   └── order-queue.service.ts
-│   └── repositories/
-├── redis/
-│   └── redis.service.ts
+│   ├── matching-engine/        # Fixed and market order processors
+│   ├── queue/                  # Redis order queue
+│   ├── repositories/
+│   ├── order-book.gateway.ts   # Socket.IO gateway
+│   └── order-book.service.ts
+├── redis/                      # Command and blocking Redis clients
 ├── user/
-│   └── repositories/
-└── wallet/
-    ├── dto/
-    └── repositories/
-```
+└── wallet/                     # Multi-asset wallets and wallet logs
 
----
+prisma/
+├── migrations/
+├── schema.prisma
+└── seed.ts
 
-## ⚙️ Architecture
+⚙️ How It Works
 
-### Matching Engine Flow
+Order Processing Flow
 
-```
 POST /order-book/order
         ↓
-   Freeze wallet balance
+Validate market and order input
         ↓
-   Create Order (status: Queued)
+Freeze IRT for Buy or USDT for Sell
         ↓
-   Push to Redis Queue (RPUSH)
+Create Order in PostgreSQL (Queued)
         ↓
-   Processing Loop (BLPOP)
+Push task to Redis Queue (RPUSH)
         ↓
-   FixedOrderProcessor / MarketOrderProcessor
+Processing worker receives task (BLPOP)
         ↓
-   Find matching orders from PostgreSQL
+FixedOrderProcessor / MarketOrderProcessor
         ↓
-   Execute trade inside Prisma Transaction
+Match opposite orders in the same market
         ↓
-   Update balances + Create OrderTransaction
+Settle wallets inside Prisma $transaction
         ↓
-   Order status → Finished / InProgress
-```
+Create OrderTransaction and update order status
+        ↓
+Broadcast the updated OrderBook
 
-### Order Status Lifecycle
+Order Status Lifecycle
 
-```
 Queued → Processing → InProgress → Finished
-                   ↘ Canceled
-```
+                      └──────────→ Canceled
 
-### Queue Architecture
+Market Data Flow
 
-Instead of an in-memory queue (which is lost on crash), this project uses a **Redis List**:
+External USDT/IRT Price API
+        ↓
+MarketPriceWorker (every 10 seconds)
+        ↓
+Redis Price Cache (30-second TTL)
+        ↓
+MarketMakerWorker (every 30 seconds)
+        ↓
+Experimental Buy/Sell orders around the live price
+        ↓
+OrderBook Depth + Socket.IO update
 
-- `RPUSH orders:queue` — on order creation
-- `BLPOP orders:queue` — in the processing loop (blocks up to 5s)
-- On server restart: `syncQueueWithDB()` re-syncs all `Queued` orders from PostgreSQL back to Redis
+On application restart, syncQueueWithDB() loads remaining Queued orders from PostgreSQL and places them back into Redis.
 
----
+🗄️ Data Model
 
-## 🗄️ Database Schema
-
-```
-User ──(1:1)── Wallet ──(1:N)── WalletLog
+User ──< Wallet >── Asset
   │
-  └──(1:N)── Order ──(1:N)── OrderTransaction
-                              (buyOrderId + sellOrderId)
-```
+  └──< Order >── Market
+          │          ├── baseAsset  (USDT)
+          │          └── quoteAsset (IRT)
+          │
+          └──< OrderTransaction
 
-All monetary fields use `Decimal(20,8)` precision to avoid floating-point issues.
+Important rules:
 
----
+A Buy order freezes the quote asset (IRT).
 
-## 🔐 Security Features
+A Sell order freezes the base asset (USDT).
 
-| Feature | Implementation |
-|---|---|
-| Authentication | JWT Access Token (15m) + Refresh Token (7d) in Redis |
-| Password hashing | bcrypt with 10 salt rounds |
-| Rate Limiting | @nestjs/throttler (global + per-endpoint) |
-| Idempotency | Redis-based idempotency key (24h TTL) |
-| Input Validation | class-validator with whitelist + forbidNonWhitelisted |
-| HTTP Security | Helmet middleware |
+Orders only match inside the same market.
 
-### Idempotency
+Orders from the same user do not match each other.
 
-All state-changing endpoints require an `Idempotency-Key` header to prevent duplicate requests
+Monetary values use Decimal(20, 8) in PostgreSQL.
 
----
+Market maker orders use source = MarketMaker; normal orders use source = User.
 
-## 📦 Prerequisites
+🛠️ Installation
 
-- Node.js >= 18
-- PostgreSQL
-- Redis
+Prerequisites
 
----
+Node.js 20.9+ (Node.js 22 LTS recommended)
 
-## 🛠️ Installation
+PostgreSQL
 
-**1. Clone the repository:**
-```bash
-git clone https://github.com/mtdamir/OrderBook.git
-cd OrderBook
-```
+Redis
 
-**2. Install dependencies:**
-```bash
+Setup
+
 npm install
-```
 
-**3. Set up environment variables:**
-```bash
-cp .env.example .env
-```
+Create a .env file:
 
-Fill in your `.env`:
-```env
-DATABASE_URL="postgresql://postgres:password@localhost:5432/p2p_orderbook"
+DATABASE_URL=postgresql://postgres:password@localhost:5432/p2p_orderbook
+PORT=3000
 
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-JWT_ACCESS_SECRET=your_access_secret
+JWT_ACCESS_SECRET=replace_with_a_long_random_secret
 JWT_ACCESS_EXPIRES_IN=15m
-JWT_REFRESH_SECRET=your_refresh_secret
+JWT_REFRESH_SECRET=replace_with_another_long_random_secret
 JWT_REFRESH_EXPIRES_IN=7d
-```
 
-**4. Run database migrations:**
-```bash
-npx prisma migrate dev
+ZIPODO_USDT_PRICE_URL=https://api.zipodo.ir/usdt/
+EXTERNAL_PRICE_REQUEST_TIMEOUT_MS=10000
+MARKET_PRICE_REFRESH_INTERVAL_MS=10000
+MARKET_PRICE_CACHE_TTL_SECONDS=30
+
+MARKET_MAKER_ENABLED=true
+MARKET_MAKER_REFRESH_INTERVAL_MS=30000
+
+Prepare the database and seed the default assets and market:
+
 npx prisma generate
-```
+npx prisma migrate dev
+npx prisma db seed
 
-**5. Start the server:**
-```bash
+The seed creates:
+
+Assets: IRT, USDT
+Market: USDTIRT
+
+Start the application:
+
 npm run start:dev
-```
 
----
+🔐 Security & Reliability
 
-## 📖 API Documentation
+Password hashing with bcrypt
 
-Swagger UI is available at:
-```
-http://localhost:3000/api/docs
-```
+Short-lived Access Token and Redis-backed Refresh Token
 
-### Auth Endpoints
+DTO validation with whitelist and unknown-field rejection
 
-| Method | Endpoint | Description | Auth |
-|---|---|---|---|
-| POST | `/auth/register` | Register new user | ❌ |
-| POST | `/auth/login` | Login and get tokens | ❌ |
-| POST | `/auth/logout` | Logout and revoke token | ✅ |
-| POST | `/auth/refresh` | Refresh access token | ✅ |
+Global and per-route rate limiting
 
-### Wallet Endpoints
+Redis Idempotency with a 24-hour TTL
 
-| Method | Endpoint | Description | Auth | Idempotent |
-|---|---|---|---|---|
-| GET | `/wallet` | Get wallet balance | ✅ | ❌ |
-| POST | `/wallet/deposit` | Deposit funds | ✅ | ✅ |
-| POST | `/wallet/withdraw` | Withdraw funds | ✅ | ✅ |
+Atomic wallet and trade updates with Prisma transactions
 
-### OrderBook Endpoints
+Separate Redis clients for normal and blocking commands
 
-| Method | Endpoint | Description | Auth | Idempotent |
-|---|---|---|---|---|
-| POST | `/order-book/order` | Create new order | ✅ | ✅ |
-| POST | `/order-book/order/:id/cancel` | Cancel an order | ✅ | ✅ |
-| GET | `/order-book/my-orders` | Get my orders | ✅ | ❌ |
+🗂️ Key Design Decisions
 
----
+Dynamic assets and markets — adding BTC or another market does not require changing a currency enum.
 
-## 🧪 Testing the Matching Engine
+Multi-asset wallets — every user owns an independent wallet for each supported asset.
 
-**1. Register two users:**
-```bash
-POST /auth/register  # buyer
-POST /auth/register  # seller
-```
+PostgreSQL as source of truth — Redis improves processing speed but does not replace persistent order data.
 
-**2. Deposit funds to both:**
-```bash
-POST /wallet/deposit  # { "amount": 100000 }
-```
+Redis blocking queue — avoids CPU-heavy polling and survives application restarts through database re-sync.
 
-**3. Create a Sell order (as seller):**
-```json
-POST /order-book/order
-{
-  "type": "Sell",
-  "priceType": "Fixed",
-  "price": 5000,
-  "amount": 10
-}
-```
+Prisma transactions — balance settlement and trade creation succeed or fail together.
 
-**4. Create a matching Buy order (as buyer):**
-```json
-POST /order-book/order
-{
-  "type": "Buy",
-  "priceType": "Fixed",
-  "price": 5000,
-  "amount": 10
-}
-```
+Decimal arithmetic — prevents floating-point precision errors in prices and amounts.
 
-**5. Check results:**
-```bash
-GET /order-book/my-orders  # both orders should be Finished
-GET /wallet                # balances should have changed
-```
-
----
-
-## 📊 Monitoring Redis Queue
-
-```bash
-# Monitor all Redis operations in real-time
-redis-cli monitor
-
-# Check queue contents
-redis-cli LRANGE orders:queue 0 -1
-
-# Check queue length
-redis-cli LLEN orders:queue
-```
-
----
-
-## 🗂️ Key Design Decisions
-
-**1. Repository Pattern** — separates database queries from business logic. Services never touch Prisma directly.
-
-**2. Redis Queue over In-Memory** — survives server restarts. On startup, `syncQueueWithDB()` re-syncs any unprocessed orders.
-
-**3. Prisma Transactions** — all matching engine operations (balance updates + order updates + transaction creation) run inside a single `$transaction` to guarantee atomicity.
-
-**4. Decimal Precision** — all monetary and quantity fields use `Decimal(20,8)` in PostgreSQL and `decimal.js` in TypeScript to avoid floating-point errors.
-
-**5. Idempotency via Redis** — clients send a unique `Idempotency-Key` header. The server caches responses in Redis for 24 hours, so duplicate requests return the same result without re-processing.
-
+Push-based updates — Socket.IO sends new market depth without continuous frontend polling.
