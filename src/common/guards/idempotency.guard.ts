@@ -49,7 +49,6 @@ export class IdempotencyGuard implements CanActivate {
 
     const storageKey = this.idempotencyService.createStorageKey(
       request.user.id,
-      request.method,
       path,
       idempotencyKey,
     );

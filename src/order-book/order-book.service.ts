@@ -51,7 +51,7 @@ export class OrderBookService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     await this.syncQueueWithDB();
 
-    await this.startProcessing();
+    void this.startProcessing();
   }
 
   onModuleDestroy() {

@@ -24,17 +24,14 @@ export class IdempotencyService {
 
   createStorageKey(
     userId: string,
-    method: string,
     path: string,
     idempotencyKey: string,
   ): string {
-    const scope = [userId, method.toUpperCase(), path, idempotencyKey].join(
-      ':',
-    );
+    const scope = [userId,  path, idempotencyKey].join('|',
+);
 
-    const hash = createHash('sha256').update(scope).digest('hex');
 
-    return `idempotency:${hash}`;
+    return `idempotency:${scope}`;
   }
 
   createRequestHash(body: unknown): string {
